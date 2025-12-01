@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>持久走ラップ付きタイマー</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* デジタル時計風フォント */
+        @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@700&display=swap');
+        
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            touch-action: manipulation; /* ダブルタップズーム防止 */
+            user-select: none; /* テキスト選択防止 */
+        }
+        .font-mono-digital {
+            font-family: 'Roboto Mono', monospace;
+            font-variant-numeric: tabular-nums;
+        }
+        
+        /* テーブル列幅の調整（判定列を追加） */
+        .rank-col { width: 12%; }
+        .time-col { width: 38%; }
+        .grade-col { width: 10%; } /* 判定 */
+        .diff-col { width: 25%; }
+        .del-col { width: 15%; }
+        
+        /* スクロールバーのカスタマイズ */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen flex flex-col overflow-hidden">
+
+    <!-- ヘッダーとタイマー表示 -->
+    <header class="bg-white shadow-md p-3 flex-none z-10">
+        <h1 class="text-center text-gray-500 text-xs font-bold mb-1">持久走 記録タイマー (成績判定付き)</h1>
+        
+        <!-- メインタイマー -->
+        <div class="flex flex-col items-center bg-gray-900 rounded-lg p-2 mb-2 shadow-inner">
+            <div id="timerDisplay" class="text-6xl md:text-8xl lg:text-9xl font-mono-digital text-green-400 tracking-wider">
+                00:00.00
+            </div>
+            <!-- 直前のラップ表示エリア -->
+            <div class="mt-1 w-full border-t border-gray-700 pt-2 flex justify-between items-center px-2 md:px-4">
+                <span class="text-gray-400 text-xs md:text-base">直前の記録</span>
+                <span id="lastLapDisplay" class="text-2xl md:text-4xl font-mono-digital text-yellow-400">
+                    --:--.--
+                </span>
+            </div>
+        </div>
+
+        <!-- 判定基準設定エリア（開閉式） -->
+        <details class="bg-gray-50 border border-gray-200 rounded-lg mb-2 text-sm">
+            <summary class="cursor-pointer p-2 font-bold text-gray-600 hover:bg-gray-100 select-none list-none flex justify-between items-center">
+                <span>⚙️ 判定基準の設定（A・Bのタイム変更）</span>
+                <span class="text-xs text-gray-400">▼</span>
+            </summary>
+            <div class="p-3 border-t border-gray-200 grid gap-2">
+                <div class="flex items-center justify-between">
+                    <span class="font-bold text-red-600">A判定</span>
+                    <div class="flex items-center space-x-1">
+                        <input type="number" id="inputLimitAMin" value="3" min="0" class="w-12 p-1 border rounded text-center" onchange="updateSettings()">
+                        <span>分</span>
+                        <input type="number" id="inputLimitASec" value="00" min="0" max="59" class="w-12 p-1 border rounded text-center" onchange="updateSettings()">
+                        <span>秒未満</span>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="font-bold text-blue-600">B判定</span>
+                    <div class="flex items-center space-x-1">
+                        <input type="number" id="inputLimitBMin" value="5" min="0" class="w-12 p-1 border rounded text-center" onchange="updateSettings()">
+                        <span>分</span>
+                        <input type="number" id="inputLimitBSec" value="00" min="0" max="59" class="w-12 p-1 border rounded text-center" onchange="updateSettings()">
+                        <span>秒未満</span>
+                    </div>
+                </div>
+                <div class="text-xs text-gray-500 text-right mt-1">※変更すると記録済みの判定も更新されます</div>
+            </div>
+        </details>
+        
+        <!-- 操作ボタンエリア -->
+        <div class="grid grid-cols-2 gap-3 mb-1">
+            <button id="btnStartStop" class="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold py-3 px-4 rounded-lg text-xl shadow transition-colors">
+                スタート
+            </button>
+            <button id="btnReset" class="bg-gray-500 hover:bg-gray-600 active:bg-gray-700 text-white font-bold py-3 px-4 rounded-lg text-xl shadow transition-colors">
+                リセット
+            </button>
+        </div>
+    </header>
+
+    <!-- メイン記録ボタン -->
+    <div class="p-3 bg-gray-100 flex-none">
+        <button id="btnLap" class="w-full bg-orange-500 active:bg-orange-600 text-white font-bold py-5 rounded-xl shadow-lg transform active:scale-95 transition-all flex flex-col items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-gray-400" disabled>
+            <span class="text-3xl md:text-4xl">ゴール記録</span>
+            <span class="text-sm opacity-90 mt-1">（タップして順位確定）</span>
+        </button>
+    </div>
+
+    <!-- ツールバー -->
+    <div class="px-4 py-2 flex flex-col md:flex-row justify-between items-center bg-gray-200 text-sm flex-none border-t border-b border-gray-300 gap-2">
+        <div class="font-bold text-gray-700 w-full md:w-auto text-center md:text-left">
+            記録数: <span id="countDisplay">0</span> / 150
+        </div>
+        <div class="flex items-center justify-center space-x-2 w-full md:w-auto">
+            <!-- 判定除外チェックボックス -->
+            <label class="flex items-center space-x-1 text-xs text-gray-600 cursor-pointer bg-white px-2 py-2 rounded border border-gray-300 hover:bg-gray-50 select-none">
+                <input type="checkbox" id="checkHideGrade" class="rounded text-blue-600 focus:ring-blue-500 h-4 w-4">
+                <span>判定をコピーしない</span>
+            </label>
+            <button id="btnUndo" class="bg-red-100 text-red-600 border border-red-300 px-3 py-2 rounded hover:bg-red-200 font-bold transition-colors disabled:opacity-50 text-xs" disabled>
+                1つ戻る
+            </button>
+            <button id="btnCopy" class="bg-green-100 text-green-700 border border-green-300 px-3 py-2 rounded hover:bg-green-200 font-bold transition-colors disabled:opacity-50 text-xs" disabled>
+                コピー
+            </button>
+        </div>
+    </div>
+
+    <!-- 記録リスト -->
+    <div class="flex-grow overflow-y-auto bg-white">
+        <table class="w-full text-center border-collapse table-fixed">
+            <thead class="bg-gray-50 sticky top-0 shadow-sm text-gray-600 z-10">
+                <tr>
+                    <th class="py-2 border-b rank-col">順位</th>
+                    <th class="py-2 border-b time-col">タイム</th>
+                    <th class="py-2 border-b grade-col">判定</th>
+                    <th class="py-2 border-b diff-col">差</th>
+                    <th class="py-2 border-b del-col">削除</th>
+                </tr>
+            </thead>
+            <tbody id="lapList" class="text-lg md:text-xl">
+                <!-- ここに記録が追加されます -->
+            </tbody>
+        </table>
+        <div id="emptyState" class="text-center text-gray-400 py-10 text-sm">
+            まだ記録がありません
+        </div>
+        <div class="h-10"></div>
+    </div>
+
+    <!-- コピー完了トースト -->
+    <div id="toast" class="fixed bottom-10 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-xl opacity-0 transition-opacity duration-300 pointer-events-none z-50">
+        コピーしました！
+    </div>
+
+    <script>
+        // 変数定義
+        let startTime = 0;
+        let elapsedTime = 0;
+        let timerInterval;
+        let isRunning = false;
+        let laps = []; // 記録配列
+        const MAX_LAPS = 150;
+
+        // 判定基準（ミリ秒）: 初期値
+        let limitAMs = 3 * 60 * 1000; // 3分
+        let limitBMs = 5 * 60 * 1000; // 5分
+
+        // DOM要素
+        const timerDisplay = document.getElementById('timerDisplay');
+        const lastLapDisplay = document.getElementById('lastLapDisplay');
+        const btnStartStop = document.getElementById('btnStartStop');
+        const btnReset = document.getElementById('btnReset');
+        const btnLap = document.getElementById('btnLap');
+        const btnUndo = document.getElementById('btnUndo');
+        const btnCopy = document.getElementById('btnCopy');
+        const countDisplay = document.getElementById('countDisplay');
+        const lapList = document.getElementById('lapList');
+        const emptyState = document.getElementById('emptyState');
+        const toast = document.getElementById('toast');
+        const checkHideGrade = document.getElementById('checkHideGrade'); // 判定隠しチェックボックス
+        
+        // 設定入力要素
+        const inputLimitAMin = document.getElementById('inputLimitAMin');
+        const inputLimitASec = document.getElementById('inputLimitASec');
+        const inputLimitBMin = document.getElementById('inputLimitBMin');
+        const inputLimitBSec = document.getElementById('inputLimitBSec');
+
+        // 時間フォーマット関数 (MM:SS.mm)
+        function formatTime(ms) {
+            const minutes = Math.floor(ms / 60000);
+            const seconds = Math.floor((ms % 60000) / 1000);
+            const hundredths = Math.floor((ms % 1000) / 10);
+            return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`;
+        }
+
+        // 差のフォーマット
+        function formatDiff(diffMs) {
+            const diffMin = Math.floor(diffMs / 60000);
+            const diffSec = Math.floor((diffMs % 60000) / 1000);
+            const diffHun = Math.floor((diffMs % 1000) / 10);
+            
+            if (diffMin > 0) {
+                 return `+${diffMin}:${diffSec.toString().padStart(2,'0')}.${diffHun.toString().padStart(2,'0')}`;
+            } else {
+                 return `+${diffSec}.${diffHun.toString().padStart(2,'0')}`;
+            }
+        }
+
+        // 設定更新処理
+        window.updateSettings = function() {
+            // 入力値の取得とミリ秒変換
+            const aMin = parseInt(inputLimitAMin.value) || 0;
+            const aSec = parseInt(inputLimitASec.value) || 0;
+            limitAMs = (aMin * 60 + aSec) * 1000;
+
+            const bMin = parseInt(inputLimitBMin.value) || 0;
+            const bSec = parseInt(inputLimitBSec.value) || 0;
+            limitBMs = (bMin * 60 + bSec) * 1000;
+
+            // 既にデータがある場合は再描画して判定を更新
+            if (laps.length > 0) {
+                recalculateAndRender();
+            }
+        };
+
+        // 成績判定ロジック
+        function calculateGrade(ms) {
+            if (ms < limitAMs) {
+                return { label: 'A', color: 'text-red-600' };
+            } else if (ms < limitBMs) {
+                return { label: 'B', color: 'text-blue-600' };
+            } else {
+                return { label: 'C', color: 'text-gray-500' };
+            }
+        }
+
+        // タイマー更新
+        function updateTimer() {
+            const now = Date.now();
+            const time = now - startTime + elapsedTime;
+            timerDisplay.textContent = formatTime(time);
+        }
+
+        // スタート/ストップ
+        btnStartStop.addEventListener('click', () => {
+            if (isRunning) {
+                clearInterval(timerInterval);
+                elapsedTime += Date.now() - startTime;
+                isRunning = false;
+                btnStartStop.textContent = '再開';
+                btnStartStop.className = 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold py-3 px-4 rounded-lg text-xl shadow transition-colors';
+                btnLap.disabled = true;
+                btnLap.classList.add('disabled:bg-gray-400');
+                btnLap.classList.remove('bg-orange-500', 'active:bg-orange-600');
+            } else {
+                startTime = Date.now();
+                timerInterval = setInterval(updateTimer, 10);
+                isRunning = true;
+                btnStartStop.textContent = 'ストップ';
+                btnStartStop.className = 'bg-red-500 hover:bg-red-600 active:bg-red-700 text-white font-bold py-3 px-4 rounded-lg text-xl shadow transition-colors';
+                btnLap.disabled = false;
+                btnLap.classList.remove('disabled:bg-gray-400');
+                btnLap.classList.add('bg-orange-500', 'active:bg-orange-600');
+            }
+        });
+
+        // リセット
+        btnReset.addEventListener('click', () => {
+            if (laps.length > 0 && !confirm('記録を全消去してリセットしますか？')) return;
+            clearInterval(timerInterval);
+            isRunning = false;
+            startTime = 0;
+            elapsedTime = 0;
+            laps = [];
+            timerDisplay.textContent = '00:00.00';
+            lastLapDisplay.textContent = '--:--.--';
+            btnStartStop.textContent = 'スタート';
+            btnStartStop.className = 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold py-3 px-4 rounded-lg text-xl shadow transition-colors';
+            btnLap.disabled = true;
+            btnLap.classList.add('disabled:bg-gray-400');
+            btnLap.classList.remove('bg-orange-500', 'active:bg-orange-600');
+            
+            renderList();
+        });
+
+        // ラップ記録
+        btnLap.addEventListener('click', (e) => {
+            e.target.blur();
+            if (laps.length >= MAX_LAPS) {
+                alert('記録数が上限(150人)に達しました。');
+                return;
+            }
+
+            const now = Date.now();
+            const currentTotalTime = isRunning ? (now - startTime + elapsedTime) : elapsedTime;
+            
+            laps.push({ rawTime: currentTotalTime });
+            recalculateAndRender();
+            
+            requestAnimationFrame(() => {
+                const rows = lapList.getElementsByTagName('tr');
+                if (rows.length > 0) {
+                    rows[rows.length - 1].scrollIntoView({ behavior: 'smooth', block: 'end' });
+                }
+            });
+        });
+
+        // 1つ戻る
+        btnUndo.addEventListener('click', () => {
+            if (laps.length === 0) return;
+            if (!confirm(`直前の記録（${laps.length}位）を取り消しますか？`)) return;
+            laps.pop();
+            recalculateAndRender();
+        });
+
+        // 特定行削除
+        window.deleteLap = function(index) {
+            const rank = index + 1;
+            if (!confirm(`${rank}位の記録を削除しますか？\n（それ以降の順位は自動で繰り上がります）`)) return;
+            laps.splice(index, 1);
+            recalculateAndRender();
+        };
+
+        // 再計算と描画
+        function recalculateAndRender() {
+            laps.forEach((lap, index) => {
+                lap.rank = index + 1;
+                lap.timeString = formatTime(lap.rawTime);
+                
+                // 判定を追加
+                const gradeInfo = calculateGrade(lap.rawTime);
+                lap.grade = gradeInfo.label;
+                lap.gradeColor = gradeInfo.color;
+                
+                if (index === 0) {
+                    lap.diff = '-';
+                } else {
+                    const prev = laps[index - 1];
+                    const diff = lap.rawTime - prev.rawTime;
+                    lap.diff = formatDiff(diff);
+                }
+            });
+
+            if (laps.length > 0) {
+                const last = laps[laps.length - 1];
+                lastLapDisplay.textContent = `${last.rank}位 ${last.timeString}`;
+            } else {
+                lastLapDisplay.textContent = '--:--.--';
+            }
+
+            renderList();
+        }
+
+        // コピー (判定も含めるかチェック)
+        btnCopy.addEventListener('click', () => {
+            if (laps.length === 0) return;
+            
+            const hideGrade = checkHideGrade.checked; // 判定を隠すかどうかのフラグ
+            
+            // ヘッダー作成
+            let clipText = hideGrade ? '順位\tタイム\n' : '順位\tタイム\t判定\n';
+
+            laps.forEach(lap => {
+                if (hideGrade) {
+                    clipText += `${lap.rank}\t${lap.timeString}\n`;
+                } else {
+                    clipText += `${lap.rank}\t${lap.timeString}\t${lap.grade}\n`;
+                }
+            });
+
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(clipText).then(showToast).catch(() => alert('コピー失敗'));
+            } else {
+                const ta = document.createElement('textarea');
+                ta.value = clipText;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                showToast();
+            }
+        });
+
+        function showToast() {
+            toast.classList.remove('opacity-0');
+            setTimeout(() => toast.classList.add('opacity-0'), 2000);
+        }
+
+        function renderList() {
+            lapList.innerHTML = '';
+            
+            if (laps.length === 0) {
+                emptyState.style.display = 'block';
+                btnUndo.disabled = true;
+                btnCopy.disabled = true;
+            } else {
+                emptyState.style.display = 'none';
+                btnUndo.disabled = false;
+                btnCopy.disabled = false;
+
+                const fragment = document.createDocumentFragment();
+                
+                laps.forEach((lap, index) => {
+                    const tr = document.createElement('tr');
+                    tr.className = 'border-b hover:bg-gray-50 transition-colors odd:bg-white even:bg-gray-50';
+                    tr.innerHTML = `
+                        <td class="py-2 font-bold text-gray-700 text-lg md:text-xl">${lap.rank}</td>
+                        <td class="py-2 font-mono-digital text-blue-600 text-xl md:text-2xl font-bold">${lap.timeString}</td>
+                        <td class="py-2 font-bold ${lap.gradeColor} text-lg md:text-xl">${lap.grade}</td>
+                        <td class="py-2 text-gray-400 text-sm md:text-base">${lap.diff}</td>
+                        <td class="py-2">
+                            <button onclick="deleteLap(${index})" class="text-red-400 hover:text-red-600 p-2 font-bold text-lg md:text-xl">
+                                ×
+                            </button>
+                        </td>
+                    `;
+                    fragment.appendChild(tr);
+                });
+                lapList.appendChild(fragment);
+            }
+            countDisplay.textContent = laps.length;
+        }
+
+        window.addEventListener('beforeunload', (e) => {
+            if (isRunning || laps.length > 0) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        });
+        
+        // 初期設定を適用
+        updateSettings();
+    </script>
+</body>
+</html>
